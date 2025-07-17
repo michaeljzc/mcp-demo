@@ -65,8 +65,8 @@ class MCPDataCenterManager:
             try:
                 tools = await session.list_tools()
                 all_tools[name] = tools
-            except Exception as e:
-                logger.error(f"Error listing tools for {name}: {e}")
+            except Exception:
+                all_tools[name] = []
         return all_tools
 
     async def query_resource(self, source_name: str, resource_uri: str):
@@ -103,13 +103,13 @@ class MCPDataCenterManager:
         return results
 
     async def health_check(self):
-        """健康检查"""
-        health_status = {}
+        """健康检查：返回每个数据源的状态"""
+        result = {}
         for name, session in self.sessions.items():
             try:
-                # 尝试列出资源来检查连接状态
+                # 简单调用 list_resources 作为健康检查
                 await session.list_resources()
-                health_status[name] = "healthy"
-            except Exception as e:
-                health_status[name] = f"unhealthy: {str(e)}"
-        return health_status
+                result[name] = "healthy"
+            except Exception:
+                result[name] = "unhealthy"
+        return result

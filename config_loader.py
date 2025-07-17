@@ -100,9 +100,10 @@ class ConfigLoader:
     
     def get_datasource_config(self, name: str) -> Optional[DatabaseConfig]:
         """获取指定数据源配置"""
-        if not self.config:
+        if self.config is None:
             self.load_config()
-        
+        if not self.config or not hasattr(self.config, "datasources"):
+            return None
         for datasource in self.config.datasources:
             if datasource.name == name:
                 return datasource
@@ -110,16 +111,18 @@ class ConfigLoader:
     
     def get_enabled_datasources(self) -> List[DatabaseConfig]:
         """获取所有启用的数据源"""
-        if not self.config:
+        if self.config is None:
             self.load_config()
-        
+        if not self.config or not hasattr(self.config, "datasources"):
+            return []
         return [ds for ds in self.config.datasources if ds.enabled]
     
     def get_server_config(self, datasource_name: str) -> Optional[ServerConfig]:
         """获取指定数据源的服务器配置"""
-        if not self.config:
+        if self.config is None:
             self.load_config()
-        
+        if not self.config or not hasattr(self.config, "servers"):
+            return None
         for server in self.config.servers:
             if server.datasource == datasource_name:
                 return server
@@ -156,12 +159,16 @@ class ConfigLoader:
         """验证配置文件"""
         errors = []
         
-        if not self.config:
+        if self.config is None:
             try:
                 self.load_config()
             except Exception as e:
                 errors.append(f"配置文件加载失败: {e}")
                 return errors
+        
+        if not self.config or not hasattr(self.config, "datasources"):
+            errors.append("配置文件缺少 datasources 字段")
+            return errors
         
         # 验证数据源配置
         datasource_names = set()
@@ -193,6 +200,9 @@ class ConfigLoader:
         
         # 验证服务器配置
         server_ports = set()
+        if not hasattr(self.config, "servers"):
+            errors.append("配置文件缺少 servers 字段")
+            return errors
         for server in self.config.servers:
             if server.port in server_ports:
                 errors.append(f"服务器端口冲突: {server.port}")
@@ -213,8 +223,11 @@ class ConfigLoader:
         """生成环境变量配置"""
         env_vars = {}
         
-        if not self.config:
+        if self.config is None:
             self.load_config()
+        
+        if not self.config or not hasattr(self.config, "datasources"):
+            return env_vars
         
         for datasource in self.config.datasources:
             if not datasource.enabled:
@@ -236,12 +249,13 @@ class ConfigLoader:
     
     def export_config(self, format: str = 'yaml', output_path: str = None) -> str:
         """导出配置文件"""
-        if not self.config:
+        if self.config is None:
             self.load_config()
-        
+        if not self.config:
+            return ""
         if format == 'yaml':
             config_dict = {
-                'datacenter': self.config.datacenter,
+                'datacenter': getattr(self.config, 'datacenter', {}),
                 'datasources': [
                     {
                         'name': ds.name,
@@ -257,7 +271,7 @@ class ConfigLoader:
                         **(({'headers': ds.headers} if ds.headers else {})),
                         **(({'schemas': ds.schemas} if ds.schemas else {}))
                     }
-                    for ds in self.config.datasources
+                    for ds in getattr(self.config, 'datasources', [])
                 ],
                 'servers': [
                     {
@@ -265,23 +279,19 @@ class ConfigLoader:
                         'port': server.port,
                         'log_level': server.log_level
                     }
-                    for server in self.config.servers
+                    for server in getattr(self.config, 'servers', [])
                 ],
-                'management': self.config.management,
-                'security': self.config.security,
-                'logging': self.config.logging,
-                'monitoring': self.config.monitoring
+                'management': getattr(self.config, 'management', {}),
+                'security': getattr(self.config, 'security', {}),
+                'logging': getattr(self.config, 'logging', {}),
+                'monitoring': getattr(self.config, 'monitoring', {})
             }
-            
             content = yaml.dump(config_dict, default_flow_style=False, allow_unicode=True)
-            
             if output_path:
                 with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(content)
-            
-            return content
-        
-        raise ValueError(f"不支持的格式: {format}")
+                    f.write(content if content is not None else "")
+            return content if content is not None else ""
+        return ""
 
 # 使用示例
 if __name__ == "__main__":

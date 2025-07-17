@@ -127,6 +127,8 @@ class PostgreSQLServer(DatabaseServerBase):
                 @self.mcp.resource(f"postgresql://{self.config.name}/table/{table}")
                 def get_table_data(table_name: str = table) -> str:
                     """获取表数据"""
+                    if not psycopg2 or not hasattr(psycopg2, "extras"):
+                        raise ImportError("psycopg2.extras is not available")
                     cursor = self.connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
                     cursor.execute(f"SELECT * FROM {table_name} LIMIT 100")
                     data = cursor.fetchall()
@@ -137,6 +139,8 @@ class PostgreSQLServer(DatabaseServerBase):
         @self.mcp.tool()
         def execute_query(sql: str) -> str:
             """执行SQL查询"""
+            if not psycopg2 or not hasattr(psycopg2, "extras"):
+                raise ImportError("psycopg2.extras is not available")
             cursor = self.connection.cursor(cursor_factory=psycopg2.extras.RealDictCursor)
             try:
                 cursor.execute(sql)
@@ -415,25 +419,21 @@ class APIServer(DatabaseServerBase):
     
     def setup_tools(self):
         @self.mcp.tool()
-        def api_request(endpoint: str, method: str = "GET", data: str = None) -> str:
+        def api_request(endpoint: str, method: str = "GET", data: Optional[str] = None) -> str:
             """执行API请求"""
             import requests
-            
             try:
                 base_url = self.config.connection['base_url']
                 url = f"{base_url}{endpoint}"
-                
                 headers = self.config.headers or {}
                 if 'api_key' in self.config.connection:
                     headers['Authorization'] = f"Bearer {self.config.connection['api_key']}"
-                
                 if method.upper() == 'GET':
                     response = requests.get(url, headers=headers, timeout=30)
                 elif method.upper() == 'POST':
                     response = requests.post(url, headers=headers, json=json.loads(data) if data else None, timeout=30)
                 else:
                     return f"Method {method} not supported"
-                
                 return json.dumps({
                     "status_code": response.status_code,
                     "data": response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
