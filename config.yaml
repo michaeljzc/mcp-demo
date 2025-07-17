@@ -4,6 +4,24 @@ datacenter:
   description: "统一数据访问层"
   version: "1.0.0"
 
+# oracle jdbc
+datasources:
+  - name: oracle_demo
+    type: oracle
+    enabled: true
+    description: Oracle 测试库
+    connection:
+      host: 127.0.0.1
+      port: 1521
+      database: ORCL
+      username: your_oracle_user
+      password: your_oracle_password
+      service_name: ORCL
+      # 你也可以加 driver/jdbc_url 字段
+      # jdbc_url: "jdbc:oracle:thin:@127.0.0.1:1521:ORCL"
+    settings: {}
+    extras: {}
+
 # 数据源配置
 datasources:
   # PostgreSQL数据库

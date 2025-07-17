@@ -1,328 +1,221 @@
 """
-MCP数据中心配置文件加载器
+MCP数据中心配置文件加载器 - 简化版
 """
 import yaml
-import os
 from typing import Dict, List, Any, Optional
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
+
 @dataclass
-class DatabaseConfig:
-    """数据库配置"""
+class DataSource:
+    """数据源配置"""
     name: str
     type: str
-    enabled: bool
-    description: str
-    connection: Dict[str, Any]
-    settings: Dict[str, Any]
-    tables: Optional[List[str]] = None
-    collections: Optional[List[str]] = None
-    indices: Optional[List[str]] = None
-    endpoints: Optional[List[Dict[str, str]]] = None
-    headers: Optional[Dict[str, str]] = None
-    schemas: Optional[List[str]] = None
+    enabled: bool = True
+    description: str = ""
+    connection: Dict[str, Any] = field(default_factory=dict)
+    settings: Dict[str, Any] = field(default_factory=dict)
+    # 动态字段：tables/collections/indices/endpoints/headers/schemas
+    extras: Dict[str, Any] = field(default_factory=dict)
+
 
 @dataclass
-class ServerConfig:
-    """服务器配置"""
-    datasource: str
-    port: int
-    log_level: str
+class Config:
+    """统一配置"""
+    datacenter: Dict[str, str] = field(default_factory=dict)
+    datasources: List[DataSource] = field(default_factory=list)
+    servers: List[Dict[str, Any]] = field(default_factory=list)
+    management: Dict[str, Any] = field(default_factory=dict)
+    security: Dict[str, Any] = field(default_factory=dict)
+    logging: Dict[str, Any] = field(default_factory=dict)
+    monitoring: Dict[str, Any] = field(default_factory=dict)
 
-@dataclass
-class DataCenterConfig:
-    """数据中心配置"""
-    datacenter: Dict[str, str]
-    datasources: List[DatabaseConfig]
-    servers: List[ServerConfig]
-    management: Dict[str, Any]
-    security: Dict[str, Any]
-    logging: Dict[str, Any]
-    monitoring: Dict[str, Any]
 
 class ConfigLoader:
-    """配置文件加载器"""
+    """配置加载器"""
+    
+    # 连接字符串模板
+    CONNECTION_TEMPLATES = {
+        'postgresql': "postgresql://{username}:{password}@{host}:{port}/{database}",
+        'mysql': "mysql://{username}:{password}@{host}:{port}/{database}",
+        'sqlite': "sqlite:///{database_path}",
+        'mongodb': "mongodb://{auth}{host}:{port}/{database}",
+        'redis': "redis://{auth}{host}:{port}/{database}"
+    }
+    
+    # 必需字段验证
+    REQUIRED_FIELDS = {
+        'postgresql': ['host', 'port', 'database', 'username', 'password'],
+        'mysql': ['host', 'port', 'database', 'username', 'password'],
+        'sqlite': ['database_path'],
+        'mongodb': ['host', 'port', 'database'],
+        'redis': ['host', 'port'],
+        'elasticsearch': ['host', 'port'],
+        'rest_api': ['base_url'],
+        'graphql': ['endpoint']
+    }
     
     def __init__(self, config_path: str = "config.yaml"):
         self.config_path = Path(config_path)
-        self.config: Optional[DataCenterConfig] = None
+        self._config: Optional[Config] = None
     
-    def load_config(self) -> DataCenterConfig:
-        """加载配置文件"""
+    def load(self) -> Config:
+        """加载配置"""
         if not self.config_path.exists():
             raise FileNotFoundError(f"配置文件不存在: {self.config_path}")
         
         with open(self.config_path, 'r', encoding='utf-8') as f:
-            config_data = yaml.safe_load(f)
+            data = yaml.safe_load(f)
         
-        # 解析数据源配置
+        # 解析数据源
         datasources = []
-        for ds_config in config_data.get('datasources', []):
-            datasource = DatabaseConfig(
-                name=ds_config['name'],
-                type=ds_config['type'],
-                enabled=ds_config.get('enabled', True),
-                description=ds_config.get('description', ''),
-                connection=ds_config.get('connection', {}),
-                settings=ds_config.get('settings', {}),
-                tables=ds_config.get('tables'),
-                collections=ds_config.get('collections'),
-                indices=ds_config.get('indices'),
-                endpoints=ds_config.get('endpoints'),
-                headers=ds_config.get('headers'),
-                schemas=ds_config.get('schemas')
-            )
-            datasources.append(datasource)
+        for ds in data.get('datasources', []):
+            # 提取动态字段
+            extras = {k: v for k, v in ds.items() 
+                     if k not in ['name', 'type', 'enabled', 'description', 'connection', 'settings']}
+            
+            datasources.append(DataSource(
+                name=ds['name'],
+                type=ds['type'],
+                enabled=ds.get('enabled', True),
+                description=ds.get('description', ''),
+                connection=ds.get('connection', {}),
+                settings=ds.get('settings', {}),
+                extras=extras
+            ))
         
-        # 解析服务器配置
-        servers = []
-        for server_config in config_data.get('servers', []):
-            server = ServerConfig(
-                datasource=server_config['datasource'],
-                port=server_config['port'],
-                log_level=server_config.get('log_level', 'INFO')
-            )
-            servers.append(server)
-        
-        # 创建完整配置
-        self.config = DataCenterConfig(
-            datacenter=config_data.get('datacenter', {}),
+        self._config = Config(
+            datacenter=data.get('datacenter', {}),
             datasources=datasources,
-            servers=servers,
-            management=config_data.get('management', {}),
-            security=config_data.get('security', {}),
-            logging=config_data.get('logging', {}),
-            monitoring=config_data.get('monitoring', {})
+            servers=data.get('servers', []),
+            management=data.get('management', {}),
+            security=data.get('security', {}),
+            logging=data.get('logging', {}),
+            monitoring=data.get('monitoring', {})
         )
         
-        return self.config
+        return self._config
     
-    def get_datasource_config(self, name: str) -> Optional[DatabaseConfig]:
-        """获取指定数据源配置"""
-        if self.config is None:
-            self.load_config()
-        if not self.config or not hasattr(self.config, "datasources"):
-            return None
-        for datasource in self.config.datasources:
-            if datasource.name == name:
-                return datasource
-        return None
+    @property
+    def config(self) -> Config:
+        """获取配置（懒加载）"""
+        return self._config or self.load()
     
-    def get_enabled_datasources(self) -> List[DatabaseConfig]:
-        """获取所有启用的数据源"""
-        if self.config is None:
-            self.load_config()
-        if not self.config or not hasattr(self.config, "datasources"):
-            return []
+    def get_datasource(self, name: str) -> Optional[DataSource]:
+        """获取指定数据源"""
+        return next((ds for ds in self.config.datasources if ds.name == name), None)
+    
+    def get_enabled_datasources(self) -> List[DataSource]:
+        """获取启用的数据源"""
         return [ds for ds in self.config.datasources if ds.enabled]
     
-    def get_server_config(self, datasource_name: str) -> Optional[ServerConfig]:
-        """获取指定数据源的服务器配置"""
-        if self.config is None:
-            self.load_config()
-        if not self.config or not hasattr(self.config, "servers"):
-            return None
-        for server in self.config.servers:
-            if server.datasource == datasource_name:
-                return server
-        return None
+    def get_server(self, datasource_name: str) -> Optional[Dict[str, Any]]:
+        """获取服务器配置"""
+        return next((s for s in self.config.servers if s['datasource'] == datasource_name), None)
     
     def get_connection_string(self, datasource_name: str) -> Optional[str]:
-        """生成数据库连接字符串"""
-        datasource = self.get_datasource_config(datasource_name)
-        if not datasource:
+        """生成连接字符串"""
+        ds = self.get_datasource(datasource_name)
+        if not ds or ds.type not in self.CONNECTION_TEMPLATES:
             return None
         
-        conn = datasource.connection
+        conn = ds.connection
+        template = self.CONNECTION_TEMPLATES[ds.type]
         
-        if datasource.type == 'postgresql':
-            return f"postgresql://{conn['username']}:{conn['password']}@{conn['host']}:{conn['port']}/{conn['database']}"
-        
-        elif datasource.type == 'mysql':
-            return f"mysql://{conn['username']}:{conn['password']}@{conn['host']}:{conn['port']}/{conn['database']}"
-        
-        elif datasource.type == 'sqlite':
-            return f"sqlite:///{conn['database_path']}"
-        
-        elif datasource.type == 'mongodb':
-            auth = f"{conn['username']}:{conn['password']}@" if conn.get('username') else ""
-            return f"mongodb://{auth}{conn['host']}:{conn['port']}/{conn['database']}"
-        
-        elif datasource.type == 'redis':
-            auth = f":{conn['password']}@" if conn.get('password') else ""
-            return f"redis://{auth}{conn['host']}:{conn['port']}/{conn['database']}"
-        
-        return None
+        try:
+            if ds.type in ['mongodb', 'redis']:
+                # 处理认证信息
+                auth = f"{conn['username']}:{conn['password']}@" if conn.get('username') else ""
+                return template.format(auth=auth, **conn)
+            else:
+                return template.format(**conn)
+        except KeyError:
+            return None
     
-    def validate_config(self) -> List[str]:
-        """验证配置文件"""
+    def validate(self) -> List[str]:
+        """验证配置"""
         errors = []
+        config = self.config
         
-        if self.config is None:
-            try:
-                self.load_config()
-            except Exception as e:
-                errors.append(f"配置文件加载失败: {e}")
-                return errors
+        # 验证数据源
+        names = set()
+        for ds in config.datasources:
+            # 检查重复名称
+            if ds.name in names:
+                errors.append(f"数据源名称重复: {ds.name}")
+            names.add(ds.name)
+            
+            # 检查必需字段
+            if ds.type in self.REQUIRED_FIELDS:
+                missing = [f for f in self.REQUIRED_FIELDS[ds.type] if f not in ds.connection]
+                if missing:
+                    errors.append(f"数据源 {ds.name} 缺少字段: {missing}")
         
-        if not self.config or not hasattr(self.config, "datasources"):
-            errors.append("配置文件缺少 datasources 字段")
-            return errors
-        
-        # 验证数据源配置
-        datasource_names = set()
-        for datasource in self.config.datasources:
-            if datasource.name in datasource_names:
-                errors.append(f"数据源名称重复: {datasource.name}")
-            datasource_names.add(datasource.name)
+        # 验证服务器
+        ports = set()
+        for server in config.servers:
+            port = server.get('port')
+            if port in ports:
+                errors.append(f"端口冲突: {port}")
+            ports.add(port)
             
-            # 验证连接配置
-            if not datasource.connection:
-                errors.append(f"数据源 {datasource.name} 缺少连接配置")
-            
-            # 验证必要字段
-            required_fields = {
-                'postgresql': ['host', 'port', 'database', 'username', 'password'],
-                'mysql': ['host', 'port', 'database', 'username', 'password'],
-                'sqlite': ['database_path'],
-                'mongodb': ['host', 'port', 'database'],
-                'redis': ['host', 'port'],
-                'elasticsearch': ['host', 'port'],
-                'rest_api': ['base_url'],
-                'graphql': ['endpoint']
-            }
-            
-            if datasource.type in required_fields:
-                for field in required_fields[datasource.type]:
-                    if field not in datasource.connection:
-                        errors.append(f"数据源 {datasource.name} 缺少必要字段: {field}")
-        
-        # 验证服务器配置
-        server_ports = set()
-        if not hasattr(self.config, "servers"):
-            errors.append("配置文件缺少 servers 字段")
-            return errors
-        for server in self.config.servers:
-            if server.port in server_ports:
-                errors.append(f"服务器端口冲突: {server.port}")
-            server_ports.add(server.port)
-            
-            # 验证数据源是否存在
-            if server.datasource not in datasource_names:
-                errors.append(f"服务器配置引用了不存在的数据源: {server.datasource}")
+            # 检查数据源引用
+            if server.get('datasource') not in names:
+                errors.append(f"服务器引用了不存在的数据源: {server.get('datasource')}")
         
         return errors
     
-    def reload_config(self):
-        """重新加载配置文件"""
-        self.config = None
-        return self.load_config()
+    def reload(self) -> Config:
+        """重新加载配置"""
+        self._config = None
+        return self.load()
     
-    def get_environment_variables(self) -> Dict[str, str]:
-        """生成环境变量配置"""
+    def to_env_vars(self) -> Dict[str, str]:
+        """转换为环境变量"""
         env_vars = {}
         
-        if self.config is None:
-            self.load_config()
-        
-        if not self.config or not hasattr(self.config, "datasources"):
-            return env_vars
-        
-        for datasource in self.config.datasources:
-            if not datasource.enabled:
-                continue
-            
-            prefix = f"{datasource.name.upper()}_"
+        for ds in self.get_enabled_datasources():
+            prefix = f"{ds.name.upper()}_"
             
             # 连接配置
-            for key, value in datasource.connection.items():
-                env_key = f"{prefix}{key.upper()}"
-                env_vars[env_key] = str(value)
+            for key, value in ds.connection.items():
+                env_vars[f"{prefix}{key.upper()}"] = str(value)
             
             # 设置配置
-            for key, value in datasource.settings.items():
-                env_key = f"{prefix}SETTINGS_{key.upper()}"
-                env_vars[env_key] = str(value)
+            for key, value in ds.settings.items():
+                env_vars[f"{prefix}SETTINGS_{key.upper()}"] = str(value)
         
         return env_vars
-    
-    def export_config(self, format: str = 'yaml', output_path: str = None) -> str:
-        """导出配置文件"""
-        if self.config is None:
-            self.load_config()
-        if not self.config:
-            return ""
-        if format == 'yaml':
-            config_dict = {
-                'datacenter': getattr(self.config, 'datacenter', {}),
-                'datasources': [
-                    {
-                        'name': ds.name,
-                        'type': ds.type,
-                        'enabled': ds.enabled,
-                        'description': ds.description,
-                        'connection': ds.connection,
-                        'settings': ds.settings,
-                        **(({'tables': ds.tables} if ds.tables else {})),
-                        **(({'collections': ds.collections} if ds.collections else {})),
-                        **(({'indices': ds.indices} if ds.indices else {})),
-                        **(({'endpoints': ds.endpoints} if ds.endpoints else {})),
-                        **(({'headers': ds.headers} if ds.headers else {})),
-                        **(({'schemas': ds.schemas} if ds.schemas else {}))
-                    }
-                    for ds in getattr(self.config, 'datasources', [])
-                ],
-                'servers': [
-                    {
-                        'datasource': server.datasource,
-                        'port': server.port,
-                        'log_level': server.log_level
-                    }
-                    for server in getattr(self.config, 'servers', [])
-                ],
-                'management': getattr(self.config, 'management', {}),
-                'security': getattr(self.config, 'security', {}),
-                'logging': getattr(self.config, 'logging', {}),
-                'monitoring': getattr(self.config, 'monitoring', {})
-            }
-            content = yaml.dump(config_dict, default_flow_style=False, allow_unicode=True)
-            if output_path:
-                with open(output_path, 'w', encoding='utf-8') as f:
-                    f.write(content if content is not None else "")
-            return content if content is not None else ""
-        return ""
+
 
 # 使用示例
 if __name__ == "__main__":
-    # 创建配置加载器
-    config_loader = ConfigLoader("config.yaml")
+    loader = ConfigLoader("config.yaml")
     
     try:
-        # 加载配置
-        config = config_loader.load_config()
-        print(f"数据中心: {config.datacenter['name']}")
+        config = loader.load()
+        print(f"数据中心: {config.datacenter.get('name', 'N/A')}")
         print(f"数据源数量: {len(config.datasources)}")
-        print(f"服务器数量: {len(config.servers)}")
         
         # 验证配置
-        errors = config_loader.validate_config()
+        errors = loader.validate()
         if errors:
-            print("配置验证错误:")
+            print("配置错误:")
             for error in errors:
                 print(f"  - {error}")
         else:
             print("配置验证通过")
         
-        # 获取启用的数据源
-        enabled_datasources = config_loader.get_enabled_datasources()
-        print(f"启用的数据源: {[ds.name for ds in enabled_datasources]}")
+        # 显示启用的数据源
+        enabled = loader.get_enabled_datasources()
+        print(f"启用的数据源: {[ds.name for ds in enabled]}")
         
-        # 生成连接字符串
-        for datasource in enabled_datasources[:3]:  # 只显示前3个
-            conn_str = config_loader.get_connection_string(datasource.name)
+        # 生成连接字符串示例
+        for ds in enabled[:3]:
+            conn_str = loader.get_connection_string(ds.name)
             if conn_str:
-                print(f"{datasource.name} 连接字符串: {conn_str}")
-        
+                print(f"{ds.name}: {conn_str}")
+    
     except Exception as e:
         print(f"配置加载失败: {e}")

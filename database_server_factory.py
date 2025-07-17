@@ -38,7 +38,12 @@ except ImportError:
 import aiohttp
 import logging
 from mcp.server.fastmcp import FastMCP
-from config_loader import ConfigLoader, DatabaseConfig
+from config_loader import ConfigLoader, DataSource
+
+try:
+    import cx_Oracle
+except ImportError:
+    cx_Oracle = None
 
 # 配置日志
 logging.basicConfig(level=logging.INFO)
@@ -47,7 +52,7 @@ logger = logging.getLogger(__name__)
 class DatabaseServerBase(ABC):
     """数据库服务器基类"""
     
-    def __init__(self, config: DatabaseConfig):
+    def __init__(self, config: DataSource):
         self.config = config
         self.mcp = FastMCP(f"{config.name}_server")
         self.connection = None
@@ -122,8 +127,8 @@ class PostgreSQLServer(DatabaseServerBase):
             cursor.close()
             return json.dumps(schema_info, indent=2)
         
-        if self.config.tables:
-            for table in self.config.tables:
+        if self.config.extras.get('tables', []):
+            for table in self.config.extras.get('tables', []):
                 @self.mcp.resource(f"postgresql://{self.config.name}/table/{table}")
                 def get_table_data(table_name: str = table) -> str:
                     """获取表数据"""
@@ -146,6 +151,68 @@ class PostgreSQLServer(DatabaseServerBase):
                 cursor.execute(sql)
                 if sql.strip().upper().startswith('SELECT'):
                     results = cursor.fetchall()
+                    return json.dumps(results, default=str, indent=2)
+                else:
+                    self.connection.commit()
+                    return f"Query executed successfully. Rows affected: {cursor.rowcount}"
+            except Exception as e:
+                self.connection.rollback()
+                return f"Error: {str(e)}"
+            finally:
+                cursor.close()
+
+class OracleServer(DatabaseServerBase):
+    """Oracle 服务器"""
+    def connect(self):
+        if not cx_Oracle:
+            raise ImportError("cx_Oracle is required for Oracle support")
+        conn_config = self.config.connection
+        dsn = cx_Oracle.makedsn(
+            conn_config['host'],
+            conn_config['port'],
+            service_name=conn_config.get('service_name', conn_config['database'])
+        )
+        self.connection = cx_Oracle.connect(
+            user=conn_config['username'],
+            password=conn_config['password'],
+            dsn=dsn
+        )
+        logger.info(f"Connected to Oracle: {self.config.name}")
+
+    def disconnect(self):
+        if self.connection:
+            self.connection.close()
+            logger.info(f"Disconnected from Oracle: {self.config.name}")
+
+    def setup_resources(self):
+        @self.mcp.resource(f"oracle://{self.config.name}/tables")
+        def get_tables() -> str:
+            cursor = self.connection.cursor()
+            cursor.execute("SELECT table_name FROM user_tables")
+            tables = [row[0] for row in cursor.fetchall()]
+            cursor.close()
+            return json.dumps(tables, indent=2)
+
+        tables = self.config.extras.get('tables', [])
+        for table in tables:
+            @self.mcp.resource(f"oracle://{self.config.name}/table/{table}")
+            def get_table_data(table_name: str = table) -> str:
+                cursor = self.connection.cursor()
+                cursor.execute(f"SELECT * FROM {table_name} FETCH FIRST 100 ROWS ONLY")
+                columns = [col[0] for col in cursor.description]
+                data = [dict(zip(columns, row)) for row in cursor.fetchall()]
+                cursor.close()
+                return json.dumps(data, default=str, indent=2)
+
+    def setup_tools(self):
+        @self.mcp.tool()
+        def execute_query(sql: str) -> str:
+            cursor = self.connection.cursor()
+            try:
+                cursor.execute(sql)
+                if sql.strip().upper().startswith('SELECT'):
+                    columns = [col[0] for col in cursor.description]
+                    results = [dict(zip(columns, row)) for row in cursor.fetchall()]
                     return json.dumps(results, default=str, indent=2)
                 else:
                     self.connection.commit()
@@ -188,8 +255,8 @@ class MySQLServer(DatabaseServerBase):
             cursor.close()
             return json.dumps(tables, indent=2)
         
-        if self.config.tables:
-            for table in self.config.tables:
+        if self.config.extras.get('tables', []):
+            for table in self.config.extras.get('tables', []):
                 @self.mcp.resource(f"mysql://{self.config.name}/table/{table}")
                 def get_table_data(table_name: str = table) -> str:
                     """获取表数据"""
@@ -240,8 +307,8 @@ class SQLiteServer(DatabaseServerBase):
             tables = cursor.fetchall()
             return json.dumps([dict(table) for table in tables], indent=2)
         
-        if self.config.tables:
-            for table in self.config.tables:
+        if self.config.extras.get('tables', []):
+            for table in self.config.extras.get('tables', []):
                 @self.mcp.resource(f"sqlite://{self.config.name}/table/{table}")
                 def get_table_data(table_name: str = table) -> str:
                     """获取表数据"""
@@ -295,8 +362,8 @@ class MongoDBServer(DatabaseServerBase):
             collections = self.connection.list_collection_names()
             return json.dumps(collections, indent=2)
         
-        if self.config.collections:
-            for collection in self.config.collections:
+        if self.config.extras.get('collections', []):
+            for collection in self.config.extras.get('collections', []):
                 @self.mcp.resource(f"mongodb://{self.config.name}/collection/{collection}")
                 def get_collection_data(collection_name: str = collection) -> str:
                     """获取集合数据"""
@@ -406,12 +473,12 @@ class APIServer(DatabaseServerBase):
         @self.mcp.resource(f"api://{self.config.name}/endpoints")
         def get_endpoints() -> str:
             """获取API端点"""
-            if self.config.endpoints:
-                return json.dumps(self.config.endpoints, indent=2)
+            if self.config.extras.get('endpoints', []):
+                return json.dumps(self.config.extras.get('endpoints', []), indent=2)
             return json.dumps([], indent=2)
         
-        if self.config.endpoints:
-            for endpoint in self.config.endpoints:
+        if self.config.extras.get('endpoints', []):
+            for endpoint in self.config.extras.get('endpoints', []):
                 @self.mcp.resource(f"api://{self.config.name}/endpoint/{endpoint['name']}")
                 def get_endpoint_data(endpoint_name: str = endpoint['name']) -> str:
                     """获取端点数据"""
@@ -425,7 +492,7 @@ class APIServer(DatabaseServerBase):
             try:
                 base_url = self.config.connection['base_url']
                 url = f"{base_url}{endpoint}"
-                headers = self.config.headers or {}
+                headers = self.config.extras.get('headers', {}) or {}
                 if 'api_key' in self.config.connection:
                     headers['Authorization'] = f"Bearer {self.config.connection['api_key']}"
                 if method.upper() == 'GET':
@@ -451,10 +518,11 @@ class DatabaseServerFactory:
         'mongodb': MongoDBServer,
         'redis': RedisServer,
         'rest_api': APIServer,
+        'oracle': OracleServer,
     }
     
     @classmethod
-    def create_server(cls, config: DatabaseConfig) -> DatabaseServerBase:
+    def create_server(cls, config: DataSource) -> DatabaseServerBase:
         """创建数据库服务器"""
         server_class = cls.SERVER_MAPPING.get(config.type)
         if not server_class:
@@ -466,7 +534,7 @@ class DatabaseServerFactory:
     def create_all_servers(cls, config_path: str = "config.yaml") -> List[DatabaseServerBase]:
         """创建所有配置的服务器"""
         config_loader = ConfigLoader(config_path)
-        config = config_loader.load_config()
+        config = config_loader.load()
         
         servers = []
         for datasource in config.datasources:

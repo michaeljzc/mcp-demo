@@ -7,7 +7,7 @@ import json
 async def test_datacenter():
     """测试数据中心功能"""
     config_loader = ConfigLoader("config.yaml")
-    config = config_loader.load_config()
+    config = config_loader.load()
     
     # 获取启用的数据源
     enabled_sources = config_loader.get_enabled_datasources()

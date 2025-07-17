@@ -36,8 +36,8 @@ class ImprovedDataCenter:
         """初始化数据中心"""
         try:
             # 加载和验证配置
-            self.config = self.config_loader.load_config()
-            errors = self.config_loader.validate_config()
+            self.config = self.config_loader.load()
+            errors = self.config_loader.validate()
             
             if errors:
                 logger.error("Configuration validation failed:")
