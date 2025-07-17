@@ -297,4 +297,185 @@ class MongoDBServer(DatabaseServerBase):
                 def get_collection_data(collection_name: str = collection) -> str:
                     """获取集合数据"""
                     coll = self.connection[collection_name]
-                    data = list(coll.find().limit(100
+                    data = list(coll.find().limit(100))
+                    # 转换ObjectId为字符串
+                    for doc in data:
+                        if '_id' in doc:
+                            doc['_id'] = str(doc['_id'])
+                    return json.dumps(data, default=str, indent=2)
+    
+    def setup_tools(self):
+        @self.mcp.tool()
+        def execute_query(query: str) -> str:
+            """执行MongoDB查询"""
+            try:
+                # 简单的查询解析
+                import ast
+                query_dict = ast.literal_eval(query)
+                collection_name = query_dict.get('collection', 'default')
+                filter_dict = query_dict.get('filter', {})
+                limit = query_dict.get('limit', 100)
+                
+                coll = self.connection[collection_name]
+                results = list(coll.find(filter_dict).limit(limit))
+                
+                # 转换ObjectId为字符串
+                for doc in results:
+                    if '_id' in doc:
+                        doc['_id'] = str(doc['_id'])
+                
+                return json.dumps(results, default=str, indent=2)
+            except Exception as e:
+                return f"Error: {str(e)}"
+
+class RedisServer(DatabaseServerBase):
+    """Redis服务器"""
+    
+    def connect(self):
+        if not redis:
+            raise ImportError("redis is required for Redis support")
+        
+        conn_config = self.config.connection
+        self.connection = redis.Redis(
+            host=conn_config['host'],
+            port=conn_config['port'],
+            db=conn_config['database'],
+            password=conn_config.get('password'),
+            decode_responses=True
+        )
+        logger.info(f"Connected to Redis: {self.config.name}")
+    
+    def disconnect(self):
+        if self.connection:
+            self.connection.close()
+            logger.info(f"Disconnected from Redis: {self.config.name}")
+    
+    def setup_resources(self):
+        @self.mcp.resource(f"redis://{self.config.name}/info")
+        def get_info() -> str:
+            """获取Redis信息"""
+            info = self.connection.info()
+            return json.dumps(info, default=str, indent=2)
+        
+        @self.mcp.resource(f"redis://{self.config.name}/keys")
+        def get_keys() -> str:
+            """获取所有键"""
+            keys = self.connection.keys('*')
+            return json.dumps(keys, indent=2)
+    
+    def setup_tools(self):
+        @self.mcp.tool()
+        def execute_command(command: str) -> str:
+            """执行Redis命令"""
+            try:
+                parts = command.split()
+                cmd = parts[0].upper()
+                args = parts[1:]
+                
+                if cmd == 'GET':
+                    result = self.connection.get(args[0])
+                elif cmd == 'SET':
+                    result = self.connection.set(args[0], args[1])
+                elif cmd == 'DEL':
+                    result = self.connection.delete(*args)
+                elif cmd == 'KEYS':
+                    result = self.connection.keys(args[0] if args else '*')
+                else:
+                    result = "Command not supported"
+                
+                return json.dumps(result, default=str, indent=2)
+            except Exception as e:
+                return f"Error: {str(e)}"
+
+class APIServer(DatabaseServerBase):
+    """REST API服务器"""
+    
+    def connect(self):
+        # API不需要持久连接
+        pass
+    
+    def disconnect(self):
+        # API不需要断开连接
+        pass
+    
+    def setup_resources(self):
+        @self.mcp.resource(f"api://{self.config.name}/endpoints")
+        def get_endpoints() -> str:
+            """获取API端点"""
+            if self.config.endpoints:
+                return json.dumps(self.config.endpoints, indent=2)
+            return json.dumps([], indent=2)
+        
+        if self.config.endpoints:
+            for endpoint in self.config.endpoints:
+                @self.mcp.resource(f"api://{self.config.name}/endpoint/{endpoint['name']}")
+                def get_endpoint_data(endpoint_name: str = endpoint['name']) -> str:
+                    """获取端点数据"""
+                    return json.dumps({"endpoint": endpoint_name, "status": "ready"}, indent=2)
+    
+    def setup_tools(self):
+        @self.mcp.tool()
+        def api_request(endpoint: str, method: str = "GET", data: str = None) -> str:
+            """执行API请求"""
+            import requests
+            
+            try:
+                base_url = self.config.connection['base_url']
+                url = f"{base_url}{endpoint}"
+                
+                headers = self.config.headers or {}
+                if 'api_key' in self.config.connection:
+                    headers['Authorization'] = f"Bearer {self.config.connection['api_key']}"
+                
+                if method.upper() == 'GET':
+                    response = requests.get(url, headers=headers, timeout=30)
+                elif method.upper() == 'POST':
+                    response = requests.post(url, headers=headers, json=json.loads(data) if data else None, timeout=30)
+                else:
+                    return f"Method {method} not supported"
+                
+                return json.dumps({
+                    "status_code": response.status_code,
+                    "data": response.json() if response.headers.get('content-type', '').startswith('application/json') else response.text
+                }, indent=2)
+            except Exception as e:
+                return f"Error: {str(e)}"
+
+class DatabaseServerFactory:
+    """数据库服务器工厂"""
+    
+    SERVER_MAPPING = {
+        'postgresql': PostgreSQLServer,
+        'mysql': MySQLServer,
+        'sqlite': SQLiteServer,
+        'mongodb': MongoDBServer,
+        'redis': RedisServer,
+        'rest_api': APIServer,
+    }
+    
+    @classmethod
+    def create_server(cls, config: DatabaseConfig) -> DatabaseServerBase:
+        """创建数据库服务器"""
+        server_class = cls.SERVER_MAPPING.get(config.type)
+        if not server_class:
+            raise ValueError(f"Unsupported database type: {config.type}")
+        
+        return server_class(config)
+    
+    @classmethod
+    def create_all_servers(cls, config_path: str = "config.yaml") -> List[DatabaseServerBase]:
+        """创建所有配置的服务器"""
+        config_loader = ConfigLoader(config_path)
+        config = config_loader.load_config()
+        
+        servers = []
+        for datasource in config.datasources:
+            if datasource.enabled:
+                try:
+                    server = cls.create_server(datasource)
+                    servers.append(server)
+                    logger.info(f"Created server for {datasource.name}")
+                except Exception as e:
+                    logger.error(f"Failed to create server for {datasource.name}: {e}")
+        
+        return servers
