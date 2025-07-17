@@ -1,0 +1,225 @@
+# MCP数据中心配置文件
+datacenter:
+  name: "Enterprise Data Center"
+  description: "统一数据访问层"
+  version: "1.0.0"
+
+# 数据源配置
+datasources:
+  # PostgreSQL数据库
+  - name: "user_database"
+    type: "postgresql"
+    enabled: true
+    description: "用户数据库"
+    connection:
+      host: "localhost"
+      port: 5432
+      database: "users_db"
+      username: "db_user"
+      password: "db_password"
+      ssl_mode: "require"
+    settings:
+      connection_timeout: 30
+      query_timeout: 60
+      max_connections: 20
+    tables:
+      - "users"
+      - "user_profiles"
+      - "user_sessions"
+  
+  # MySQL数据库
+  - name: "product_database"
+    type: "mysql"
+    enabled: true
+    description: "产品数据库"
+    connection:
+      host: "mysql.example.com"
+      port: 3306
+      database: "products"
+      username: "mysql_user"
+      password: "mysql_password"
+      charset: "utf8mb4"
+    settings:
+      connection_timeout: 30
+      query_timeout: 45
+      max_connections: 15
+    tables:
+      - "products"
+      - "categories"
+      - "inventory"
+  
+  # SQLite数据库
+  - name: "analytics_database"
+    type: "sqlite"
+    enabled: true
+    description: "分析数据库"
+    connection:
+      database_path: "./data/analytics.db"
+    settings:
+      query_timeout: 30
+    tables:
+      - "events"
+      - "user_analytics"
+      - "reports"
+  
+  # MongoDB数据库
+  - name: "logs_database"
+    type: "mongodb"
+    enabled: true
+    description: "日志数据库"
+    connection:
+      host: "mongodb.example.com"
+      port: 27017
+      database: "logs"
+      username: "mongo_user"
+      password: "mongo_password"
+      auth_source: "admin"
+    settings:
+      connection_timeout: 30
+      query_timeout: 60
+      max_connections: 10
+    collections:
+      - "application_logs"
+      - "error_logs"
+      - "access_logs"
+  
+  # Redis缓存
+  - name: "cache_store"
+    type: "redis"
+    enabled: true
+    description: "缓存存储"
+    connection:
+      host: "redis.example.com"
+      port: 6379
+      database: 0
+      password: "redis_password"
+    settings:
+      connection_timeout: 10
+      query_timeout: 30
+      max_connections: 50
+  
+  # Elasticsearch
+  - name: "search_engine"
+    type: "elasticsearch"
+    enabled: true
+    description: "搜索引擎"
+    connection:
+      host: "elasticsearch.example.com"
+      port: 9200
+      username: "elastic_user"
+      password: "elastic_password"
+      use_ssl: true
+    settings:
+      connection_timeout: 30
+      query_timeout: 60
+      max_connections: 10
+    indices:
+      - "documents"
+      - "products"
+      - "users"
+  
+  # REST API数据源
+  - name: "external_api"
+    type: "rest_api"
+    enabled: true
+    description: "外部API服务"
+    connection:
+      base_url: "https://api.example.com/v1"
+      api_key: "your_api_key_here"
+      timeout: 30
+    headers:
+      Content-Type: "application/json"
+      User-Agent: "MCP-DataCenter/1.0"
+    endpoints:
+      - name: "users"
+        path: "/users"
+        method: "GET"
+      - name: "orders"
+        path: "/orders"
+        method: "GET"
+      - name: "products"
+        path: "/products"
+        method: "GET"
+  
+  # GraphQL API数据源
+  - name: "graphql_api"
+    type: "graphql"
+    enabled: true
+    description: "GraphQL API"
+    connection:
+      endpoint: "https://graphql.example.com/graphql"
+      api_key: "graphql_api_key"
+      timeout: 30
+    headers:
+      Authorization: "Bearer {{api_key}}"
+      Content-Type: "application/json"
+    schemas:
+      - "User"
+      - "Product"
+      - "Order"
+
+# 服务器配置
+servers:
+  # 为每个数据源创建独立的MCP服务器
+  - datasource: "user_database"
+    port: 8001
+    log_level: "INFO"
+  
+  - datasource: "product_database"
+    port: 8002
+    log_level: "INFO"
+  
+  - datasource: "analytics_database"
+    port: 8003
+    log_level: "DEBUG"
+  
+  - datasource: "logs_database"
+    port: 8004
+    log_level: "INFO"
+  
+  - datasource: "cache_store"
+    port: 8005
+    log_level: "INFO"
+  
+  - datasource: "search_engine"
+    port: 8006
+    log_level: "INFO"
+  
+  - datasource: "external_api"
+    port: 8007
+    log_level: "INFO"
+  
+  - datasource: "graphql_api"
+    port: 8008
+    log_level: "INFO"
+
+# 统一管理服务器配置
+management:
+  port: 9000
+  log_level: "INFO"
+  metrics_enabled: true
+  health_check_interval: 30
+  
+# 安全配置
+security:
+  enable_authentication: true
+  jwt_secret: "your_jwt_secret_here"
+  token_expiry: 3600
+  allowed_origins:
+    - "http://localhost:3000"
+    - "https://yourdomain.com"
+
+# 日志配置
+logging:
+  level: "INFO"
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  file_path: "./logs/mcp_datacenter.log"
+  max_file_size: "10MB"
+  backup_count: 5
+
+# 监控配置
+monitoring:
+  enabled: true
+  metrics_port: 9090
+  health_check_endpoint: "/health"
+  metrics_endpoint: "/metrics"
